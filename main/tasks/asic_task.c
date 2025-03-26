@@ -4,21 +4,17 @@
 #include "bm1397.h"
 #include <string.h>
 #include "esp_log.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
-#include "asic.h"
+#include <esp_timer.h> // For precise timing
 
 static const char *TAG = "ASIC_task";
-
-// static bm_job ** active_jobs; is required to keep track of the active jobs since the
 
 void ASIC_task(void *pvParameters)
 {
     GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
 
-    //initialize the semaphore
+    // Initialize the semaphore
     GLOBAL_STATE->ASIC_TASK_MODULE.semaphore = xSemaphoreCreateBinary();
 
     GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs = malloc(sizeof(bm_job *) * 128);
@@ -35,8 +31,13 @@ void ASIC_task(void *pvParameters)
 
     while (1)
     {
-
         bm_job *next_bm_job = (bm_job *)queue_dequeue(&GLOBAL_STATE->ASIC_jobs_queue);
+
+        if (next_bm_job == NULL) {
+            // No work available, delay briefly and continue
+            vTaskDelay(1 / portTICK_PERIOD_MS);
+            continue;
+        }
 
         if (next_bm_job->pool_diff != GLOBAL_STATE->stratum_difficulty)
         {
@@ -44,12 +45,39 @@ void ASIC_task(void *pvParameters)
             GLOBAL_STATE->stratum_difficulty = next_bm_job->pool_diff;
         }
 
-        //(*GLOBAL_STATE->ASIC_functions.send_work_fn)(GLOBAL_STATE, next_bm_job); // send the job to the ASIC
-        ASIC_send_work(GLOBAL_STATE, next_bm_job);
+        // Send the job to the ASIC
+        (*GLOBAL_STATE->ASIC_functions.send_work_fn)(GLOBAL_STATE, next_bm_job);
 
-        // Time to execute the above code is ~0.3ms
-        // Delay for ASIC(s) to finish the job
-        //vTaskDelay((GLOBAL_STATE->asic_job_frequency_ms - 0.3) / portTICK_PERIOD_MS);
-        xSemaphoreTake(GLOBAL_STATE->ASIC_TASK_MODULE.semaphore, (GLOBAL_STATE->asic_job_frequency_ms / portTICK_PERIOD_MS));
+        // Calculate nonces processed incrementally
+        double hash_rate_hps = GLOBAL_STATE->SYSTEM_MODULE.current_hashrate * 1e12; // Hashes per second (TH/s to H/s)
+        uint64_t start_time = esp_timer_get_time() / 1000; // Start time in ms
+        uint64_t end_time = start_time + (uint64_t)GLOBAL_STATE->asic_job_frequency_ms; // End time in ms
+
+        // Wait for ASIC to finish the job, updating nonces incrementally
+        while (esp_timer_get_time() / 1000 < end_time)
+        {
+            uint64_t current_time = esp_timer_get_time() / 1000; // Current time in ms
+            double elapsed_s = (current_time - start_time) / 1000.0; // Elapsed time in seconds
+            uint64_t nonces_processed = (uint64_t)(hash_rate_hps * elapsed_s); // Nonces processed so far
+
+            // Update nonces_attempted, capping at 2³²
+            GLOBAL_STATE->nonces_attempted = (nonces_processed > 0xFFFFFFFF) ? 0xFFFFFFFF : nonces_processed;
+
+            // Small delay to avoid tight loop, adjust as needed
+            vTaskDelay(10 / portTICK_PERIOD_MS); // 10 ms granularity
+        }
+
+        // Ensure final update at job end
+        double total_elapsed_s = GLOBAL_STATE->asic_job_frequency_ms / 1000.0;
+        GLOBAL_STATE->nonces_attempted = (uint64_t)(hash_rate_hps * total_elapsed_s);
+        if (GLOBAL_STATE->nonces_attempted > 0xFFFFFFFF) {
+            GLOBAL_STATE->nonces_attempted = 0xFFFFFFFF;
+        }
+
+        // Wait for ASIC to signal completion
+        xSemaphoreTake(GLOBAL_STATE->ASIC_TASK_MODULE.semaphore, 
+                       (GLOBAL_STATE->asic_job_frequency_ms / portTICK_PERIOD_MS));
+
+        ESP_LOGI(TAG, "Job completed, nonces_attempted: %llu", GLOBAL_STATE->nonces_attempted);
     }
 }

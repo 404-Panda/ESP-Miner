@@ -15,11 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef CONFIG_GPIO_ASIC_RESET
 #define GPIO_ASIC_RESET CONFIG_GPIO_ASIC_RESET
-#else
-#define GPIO_ASIC_RESET 1
-#endif
 
 #define TYPE_JOB 0x20
 #define TYPE_CMD 0x40
@@ -107,6 +103,16 @@ static void _send_BM1366(uint8_t header, uint8_t * data, uint8_t data_len, bool 
     SERIAL_send(buf, total_length, debug);
 
     free(buf);
+}
+
+void BM1366_set_nonce_range(uint16_t range_value) {
+    unsigned char set_10_hash_counting[6] = {
+        0x00, 0x10, 0x00, 0x00,
+        (uint8_t)(range_value >> 8),   // High byte
+        (uint8_t)(range_value & 0xFF)  // Low byte
+    };
+    _send_BM1366((TYPE_CMD | GROUP_ALL | CMD_WRITE), set_10_hash_counting, 6, BM1366_SERIALTX_DEBUG);
+    ESP_LOGI(TAG, "Set nonce range to 0x%04X", range_value);
 }
 
 static void _send_simple(uint8_t * data, uint8_t total_length)
@@ -232,7 +238,6 @@ static void do_frequency_ramp_up(float target_frequency) {
 
 static uint8_t _send_init(uint64_t frequency, uint16_t asic_count)
 {
-
     // set version mask
     for (int i = 0; i < 3; i++) {
         BM1366_set_version_mask(STRATUM_DEFAULT_VERSION_MASK);
@@ -306,12 +311,12 @@ static uint8_t _send_init(uint64_t frequency, uint16_t asic_count)
     do_frequency_ramp_up((float)frequency);
 
     //register 10 is still a bit of a mystery. discussion: https://github.com/skot/ESP-Miner/pull/167
-
-    // unsigned char set_10_hash_counting[6] = {0x00, 0x10, 0x00, 0x00, 0x11, 0x5A}; //S19k Pro Default
-    // unsigned char set_10_hash_counting[6] = {0x00, 0x10, 0x00, 0x00, 0x14, 0x46}; //S19XP-Luxos Default
-    unsigned char set_10_hash_counting[6] = {0x00, 0x10, 0x00, 0x00, 0x15, 0x1C}; //S19XP-Stock Default
-    // unsigned char set_10_hash_counting[6] = {0x00, 0x10, 0x00, 0x0F, 0x00, 0x00}; //supposedly the "full" 32bit nonce range
-    _send_BM1366((TYPE_CMD | GROUP_ALL | CMD_WRITE), set_10_hash_counting, 6, BM1366_SERIALTX_DEBUG);
+    // Set nonce range using the new function instead of hardcoded array
+    BM1366_set_nonce_range(0x151C);  // S19XP-Stock Default
+    // Alternative: BM1366_set_nonce_range(0xFFFF);  // Full 32-bit nonce range
+    // Other options:
+    // BM1366_set_nonce_range(0x115A);  // S19k Pro Default
+    // BM1366_set_nonce_range(0x1446);  // S19XP-Luxos Default
 
     unsigned char init795[11] = {0x55, 0xAA, 0x51, 0x09, 0x00, 0xA4, 0x90, 0x00, 0xFF, 0xFF, 0x1C};
     _send_simple(init795, 11);
@@ -504,7 +509,7 @@ task_result * BM1366_proccess_work(void * pvParameters)
     GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
     if (GLOBAL_STATE->valid_jobs[job_id] == 0) {
-        ESP_LOGW(TAG, "Invalid job found, 0x%02X", job_id);
+        ESP_LOGE(TAG, "Invalid job found, 0x%02X", job_id);
         return NULL;
     }
 

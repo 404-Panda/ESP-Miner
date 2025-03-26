@@ -12,19 +12,21 @@ import { ISystemInfo } from 'src/models/ISystemInfo';
   styleUrls: ['./home.component.scss']
 })
 export class HomeComponent {
-
   public info$!: Observable<ISystemInfo>;
   public quickLink$!: Observable<string | undefined>;
   public fallbackQuickLink$!: Observable<string | undefined>;
   public expectedHashRate$!: Observable<number | undefined>;
 
-
   public chartOptions: any;
   public dataLabel: number[] = [];
   public hashrateData: number[] = [];
   public temperatureData: number[] = [];
-  public powerData: number[] = [];
+  public dataDataAverage: number[] = [];
   public chartData?: any;
+
+  public bestShareData: number[] = [];
+  public bestShareChartOptions: any;
+  public bestShareChartData?: any;
 
   public maxPower: number = 50;
   public maxTemp: number = 75;
@@ -36,7 +38,6 @@ export class HomeComponent {
   ) {
     this.initializeChart();
 
-    // Subscribe to theme changes
     this.themeService.getThemeSettings().subscribe(() => {
       this.updateChartColors();
     });
@@ -49,7 +50,6 @@ export class HomeComponent {
     const surfaceBorder = documentStyle.getPropertyValue('--surface-border');
     const primaryColor = documentStyle.getPropertyValue('--primary-color');
 
-    // Update chart colors
     if (this.chartData && this.chartData.datasets) {
       this.chartData.datasets[0].backgroundColor = primaryColor + '30';
       this.chartData.datasets[0].borderColor = primaryColor;
@@ -59,7 +59,6 @@ export class HomeComponent {
       this.chartData.datasets[2].borderColor = textColorSecondary;
     }
 
-    // Update chart options
     if (this.chartOptions) {
       this.chartOptions.plugins.legend.labels.color = textColor;
       this.chartOptions.scales.x.ticks.color = textColorSecondary;
@@ -70,8 +69,21 @@ export class HomeComponent {
       this.chartOptions.scales.y2.grid.color = surfaceBorder;
     }
 
-    // Force chart update
+    if (this.bestShareChartData && this.bestShareChartData.datasets) {
+      this.bestShareChartData.datasets[0].backgroundColor = primaryColor + '30';
+      this.bestShareChartData.datasets[0].borderColor = primaryColor;
+    }
+
+    if (this.bestShareChartOptions) {
+      this.bestShareChartOptions.plugins.legend.labels.color = textColor;
+      this.bestShareChartOptions.scales.x.ticks.color = textColorSecondary;
+      this.bestShareChartOptions.scales.x.grid.color = surfaceBorder;
+      this.bestShareChartOptions.scales.y.ticks.color = textColorSecondary;
+      this.bestShareChartOptions.scales.y.grid.color = surfaceBorder;
+    }
+
     this.chartData = { ...this.chartData };
+    this.bestShareChartData = { ...this.bestShareChartData };
   }
 
   private initializeChart() {
@@ -96,6 +108,19 @@ export class HomeComponent {
           borderWidth: 1,
           yAxisID: 'y',
           fill: true,
+        },
+        {
+          type: 'line',
+          label: 'Average Hashrate',
+          data: [],
+          fill: false,
+          backgroundColor: primaryColor + '30',
+          borderColor: primaryColor + '60',
+          tension: 0,
+          pointRadius: 0,
+          borderWidth: 2,
+          borderDash: [5, 5],
+          yAxisID: 'y',
         },
         {
           type: 'line',
@@ -143,7 +168,7 @@ export class HomeComponent {
         x: {
           type: 'time',
           time: {
-            unit: 'hour', // Set the unit to 'minute'
+            unit: 'hour',
           },
           ticks: {
             color: textColorSecondary
@@ -181,55 +206,130 @@ export class HomeComponent {
       }
     };
 
+    this.bestShareChartData = {
+      labels: [],
+      datasets: [
+        {
+          type: 'line',
+          label: 'Best Share Difficulty',
+          data: [],
+          backgroundColor: primaryColor + '30',
+          borderColor: primaryColor,
+          tension: 0.1,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          fill: true,
+          borderWidth: 2
+        }
+      ]
+    };
+
+    this.bestShareChartOptions = {
+      animation: false,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          labels: {
+            color: textColor
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: function(tooltipItem: any) {
+              return `Best Share: ${tooltipItem.raw.toLocaleString()}`;
+            }
+          }
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: {
+            unit: 'hour',
+          },
+          ticks: {
+            color: textColorSecondary
+          },
+          grid: {
+            color: surfaceBorder,
+            drawBorder: false
+          }
+        },
+        y: {
+          type: 'logarithmic',
+          ticks: {
+            color: textColorSecondary,
+            callback: function(value: number) {
+              return value.toLocaleString();
+            }
+          },
+          grid: {
+            color: surfaceBorder,
+            drawBorder: false
+          }
+        }
+      }
+    };
 
     this.info$ = interval(5000).pipe(
       startWith(() => this.systemService.getInfo()),
       switchMap(() => {
-        return this.systemService.getInfo()
+        return this.systemService.getInfo();
       }),
       tap(info => {
         this.hashrateData.push(info.hashRate * 1000000000);
         this.temperatureData.push(info.temp);
-        this.powerData.push(info.power);
-
         this.dataLabel.push(new Date().getTime());
 
         if (this.hashrateData.length >= 720) {
           this.hashrateData.shift();
-          this.temperatureData.shift();
-          this.powerData.shift();
           this.dataLabel.shift();
+          this.temperatureData.shift();
         }
 
         this.chartData.labels = this.dataLabel;
         this.chartData.datasets[0].data = this.hashrateData;
-        this.chartData.datasets[1].data = this.temperatureData;
+        this.chartData.datasets[2].data = this.temperatureData;
 
-        this.chartData = {
-          ...this.chartData
-        };
+        const averageHashrate = this.calculateAverage(this.hashrateData);
+        this.dataDataAverage = Array(this.hashrateData.length).fill(averageHashrate);
+        this.chartData.datasets[1].data = this.dataDataAverage;
+
+        this.chartData = { ...this.chartData };
+
+        const currentBestDiff = parseFloat(info.bestDiff) || 0;
+        if (currentBestDiff > 0) {
+          this.bestShareData.push(currentBestDiff);
+          if (this.bestShareData.length >= 720) {
+            this.bestShareData.shift();
+            this.bestShareChartData.labels.shift();
+          }
+          this.bestShareChartData.labels = this.dataLabel;
+          this.bestShareChartData.datasets[0].data = this.bestShareData;
+          this.bestShareChartData = { ...this.bestShareChartData };
+        }
 
         this.maxPower = Math.max(50, info.power);
         this.maxTemp = Math.max(75, info.temp);
         this.maxFrequency = Math.max(800, info.frequency);
-
       }),
       map(info => {
-        info.power = parseFloat(info.power.toFixed(1))
+        info.power = parseFloat(info.power.toFixed(1));
         info.voltage = parseFloat((info.voltage / 1000).toFixed(1));
         info.current = parseFloat((info.current / 1000).toFixed(1));
         info.coreVoltageActual = parseFloat((info.coreVoltageActual / 1000).toFixed(2));
         info.coreVoltage = parseFloat((info.coreVoltage / 1000).toFixed(2));
         info.temp = parseFloat(info.temp.toFixed(1));
-
         return info;
       }),
       shareReplay({ refCount: true, bufferSize: 1 })
     );
 
-    this.expectedHashRate$ = this.info$.pipe(map(info => {
-      return Math.floor(info.frequency * ((info.smallCoreCount * info.asicCount) / 1000))
-    }))
+    this.expectedHashRate$ = this.info$.pipe(
+      map(info => {
+        return Math.floor(info.frequency * ((info.smallCoreCount * info.asicCount) / 1000));
+      })
+    );
 
     this.quickLink$ = this.info$.pipe(
       map(info => this.getQuickLink(info.stratumURL, info.stratumUser))
@@ -238,10 +338,9 @@ export class HomeComponent {
     this.fallbackQuickLink$ = this.info$.pipe(
       map(info => this.getQuickLink(info.fallbackStratumURL, info.fallbackStratumUser))
     );
-
   }
 
-  public calculateAverage(data: number[]): number {
+  private calculateAverage(data: number[]): number {
     if (data.length === 0) return 0;
     const sum = data.reduce((sum, value) => sum + value, 0);
     return sum / data.length;
@@ -268,17 +367,5 @@ export class HomeComponent {
       return `https://solohash.co.uk/user/${address}`;
     }
     return stratumURL.startsWith('http') ? stratumURL : `http://${stratumURL}`;
-  }
-
-  public calculateEfficiencyAverage(hashrateData: number[], powerData: number[]): number {
-    if (hashrateData.length === 0 || powerData.length === 0) return 0;
-    
-    // Calculate efficiency for each data point and average them
-    const efficiencies = hashrateData.map((hashrate, index) => {
-      const power = powerData[index] || 0;
-      return power / (hashrate/1000000000000); // Convert to J/TH
-    });
-    
-    return this.calculateAverage(efficiencies);
   }
 }

@@ -20,13 +20,21 @@ export class EditComponent implements OnInit, OnDestroy {
   public websiteUpdateProgress: number | null = null;
 
   public savedChanges: boolean = false;
-  public settingsUnlocked: boolean = false;
+  public devToolsOpen: boolean = false;
   public eASICModel = eASICModel;
   public ASICModel!: eASICModel;
-  public restrictedModels: eASICModel[] = Object.values(eASICModel)
-    .filter((v): v is eASICModel => typeof v === 'number');
 
   @Input() uri = '';
+
+  public nonceRangeOptions = [
+    { name: 'S19k Pro Default (0x115A)', value: 0x115A },
+    { name: 'S19XP-Luxos Default (0x1446)', value: 0x1446 },
+    { name: 'S19XP-Stock Default (0x151C)', value: 0x151C },
+    { name: 'Minimum (0x1000)', value: 0x1000 },
+    { name: 'Mid-Range (0x4000)', value: 0x4000 },
+    { name: 'Half Maximum (0x8000)', value: 0x8000 },
+    { name: 'Maximum (0xFFFF)', value: 0xFFFF }
+  ];
 
   public BM1397DropdownFrequency = [
     { name: '400', value: 400 },
@@ -77,7 +85,6 @@ export class EditComponent implements OnInit, OnDestroy {
     { name: '525 (default)', value: 525 },
     { name: '550', value: 550 },
     { name: '575', value: 575 },
-    //{ name: '596', value: 596 },
     { name: '600', value: 600 },
     { name: '625', value: 625 },
   ];
@@ -102,6 +109,7 @@ export class EditComponent implements OnInit, OnDestroy {
     { name: '1450', value: 1450 },
     { name: '1500', value: 1500 },
   ];
+
   public BM1366CoreVoltage = [
     { name: '1100', value: 1100 },
     { name: '1150', value: 1150 },
@@ -109,6 +117,7 @@ export class EditComponent implements OnInit, OnDestroy {
     { name: '1250', value: 1250 },
     { name: '1300', value: 1300 },
   ];
+
   public BM1368CoreVoltage = [
     { name: '1100', value: 1100 },
     { name: '1150', value: 1150 },
@@ -126,11 +135,8 @@ export class EditComponent implements OnInit, OnDestroy {
     private toastr: ToastrService,
     private loadingService: LoadingService
   ) {
-    // Add unlockSettings to window object for console access
-    (window as any).unlockSettings = () => {
-      this.settingsUnlocked = true;
-      console.log('Settings unlocked. You can now set custom frequency and voltage values.');
-    };
+    window.addEventListener('resize', this.checkDevTools.bind(this));
+    this.checkDevTools();
   }
 
   ngOnInit(): void {
@@ -144,12 +150,37 @@ export class EditComponent implements OnInit, OnDestroy {
         this.form = this.fb.group({
           flipscreen: [info.flipscreen == 1],
           invertscreen: [info.invertscreen == 1],
+          stratumURL: [info.stratumURL, [
+            Validators.required,
+            Validators.pattern(/^(?!.*stratum\+tcp:\/\/).*$/),
+            Validators.pattern(/^[^:]*$/),
+          ]],
+          stratumPort: [info.stratumPort, [
+            Validators.required,
+            Validators.pattern(/^[^:]*$/),
+            Validators.min(0),
+            Validators.max(65353)
+          ]],
+          fallbackStratumURL: [info.fallbackStratumURL, [
+            Validators.pattern(/^(?!.*stratum\+tcp:\/\/).*$/),
+          ]],
+          fallbackStratumPort: [info.fallbackStratumPort, [
+            Validators.required,
+            Validators.pattern(/^[^:]*$/),
+            Validators.min(0),
+            Validators.max(65353)
+          ]],
+          stratumUser: [info.stratumUser, [Validators.required]],
+          stratumPassword: ['*****', [Validators.required]],
+          fallbackStratumUser: [info.fallbackStratumUser, [Validators.required]],
+          fallbackStratumPassword: ['password', [Validators.required]],
           coreVoltage: [info.coreVoltage, [Validators.required]],
           frequency: [info.frequency, [Validators.required]],
           autofanspeed: [info.autofanspeed == 1, [Validators.required]],
           invertfanpolarity: [info.invertfanpolarity == 1, [Validators.required]],
           fanspeed: [info.fanspeed, [Validators.required]],
-          overheat_mode: [info.overheat_mode, [Validators.required]]
+          overheat_mode: [info.overheat_mode, [Validators.required]],
+          nonceRange: [info.nonceRange || 0x151C, [Validators.required]]
         });
 
         this.form.controls['autofanspeed'].valueChanges.pipe(
@@ -162,38 +193,71 @@ export class EditComponent implements OnInit, OnDestroy {
             this.form.controls['fanspeed'].enable();
           }
         });
+
+        console.log('Initial form value:', this.form.value);
+        console.log('Initial form valid:', this.form.valid);
+        console.log('Initial nonceRange:', this.form.get('nonceRange')?.value);
+
+        this.form.valueChanges.subscribe(value => {
+          console.log('Form changed to:', value);
+          console.log('Form valid:', this.form.valid);
+          console.log('Form dirty:', this.form.dirty);
+          console.log('nonceRange value:', value.nonceRange);
+          if (this.form.invalid) {
+            console.log('Form errors:', this.form.errors);
+            console.log('nonceRange errors:', this.form.get('nonceRange')?.errors);
+          }
+        });
       });
   }
 
   ngOnDestroy(): void {
-    // Remove unlockSettings from window object
-    delete (window as any).unlockSettings;
+    window.removeEventListener('resize', this.checkDevTools.bind(this));
     this.destroy$.next();
     this.destroy$.complete();
   }
 
-  public updateSystem() {
+  private checkDevTools(): void {
+    if (
+      window.outerWidth - window.innerWidth > 160 ||
+      window.outerHeight - window.innerHeight > 160
+    ) {
+      this.devToolsOpen = true;
+    } else {
+      this.devToolsOpen = false;
+    }
+  }
 
+  public updateSystem() {
     const form = this.form.getRawValue();
 
     if (form.stratumPassword === '*****') {
       delete form.stratumPassword;
     }
+    if (form.fallbackStratumPassword === 'password') {
+      delete form.fallbackStratumPassword;
+    }
+
+    console.log('Submitting form:', form);
 
     this.systemService.updateSystem(this.uri, form)
       .pipe(this.loadingService.lockUIUntilComplete())
       .subscribe({
         next: () => {
-          const successMessage = this.uri ? `Saved settings for ${this.uri}` : 'Saved settings';
-          this.toastr.success(successMessage, 'Success!');
+          this.toastr.success('Success!', 'Saved.');
           this.savedChanges = true;
         },
         error: (err: HttpErrorResponse) => {
-          const errorMessage = this.uri ? `Could not save settings for ${this.uri}. ${err.message}` : `Could not save settings. ${err.message}`;
-          this.toastr.error(errorMessage, 'Error');
+          this.toastr.error('Error.', `Could not save. ${err.message}`);
           this.savedChanges = false;
+          console.error('Save error:', err);
         }
       });
+  }
+
+  showStratumPassword: boolean = false;
+  toggleStratumPasswordVisibility() {
+    this.showStratumPassword = !this.showStratumPassword;
   }
 
   showWifiPassword: boolean = false;
@@ -206,23 +270,25 @@ export class EditComponent implements OnInit, OnDestroy {
     this.updateSystem();
   }
 
+  showFallbackStratumPassword: boolean = false;
+  toggleFallbackStratumPasswordVisibility() {
+    this.showFallbackStratumPassword = !this.showFallbackStratumPassword;
+  }
+
   public restart() {
     this.systemService.restart(this.uri)
       .pipe(this.loadingService.lockUIUntilComplete())
       .subscribe({
         next: () => {
-          const successMessage = this.uri ? `Bitaxe at ${this.uri} restarted` : 'Bitaxe restarted';
-          this.toastr.success(successMessage, 'Success');
+          this.toastr.success('Success!', 'Bitaxe restarted');
         },
         error: (err: HttpErrorResponse) => {
-          const errorMessage = this.uri ? `Failed to restart device at ${this.uri}. ${err.message}` : `Failed to restart device. ${err.message}`;
-          this.toastr.error(errorMessage, 'Error');
+          this.toastr.error('Error', `Could not restart. ${err.message}`);
         }
       });
   }
 
   getDropdownFrequency() {
-    // Get base frequency options based on ASIC model
     let options = [];
     switch(this.ASICModel) {
         case this.eASICModel.BM1366: options = [...this.BM1366DropdownFrequency]; break;
@@ -232,16 +298,12 @@ export class EditComponent implements OnInit, OnDestroy {
         default: return [];
     }
 
-    // Get current frequency value from form
     const currentFreq = this.form?.get('frequency')?.value;
-
-    // If current frequency exists and isn't in the options
     if (currentFreq && !options.some(opt => opt.value === currentFreq)) {
         options.push({
             name: `${currentFreq} (Custom)`,
             value: currentFreq
         });
-        // Sort options by frequency value
         options.sort((a, b) => a.value - b.value);
     }
 
@@ -249,7 +311,6 @@ export class EditComponent implements OnInit, OnDestroy {
   }
 
   getCoreVoltage() {
-    // Get base voltage options based on ASIC model
     let options = [];
     switch(this.ASICModel) {
         case this.eASICModel.BM1366: options = [...this.BM1366CoreVoltage]; break;
@@ -259,20 +320,15 @@ export class EditComponent implements OnInit, OnDestroy {
         default: return [];
     }
 
-    // Get current voltage value from form
     const currentVoltage = this.form?.get('coreVoltage')?.value;
-
-    // If current voltage exists and isn't in the options
     if (currentVoltage && !options.some(opt => opt.value === currentVoltage)) {
         options.push({
             name: `${currentVoltage} (Custom)`,
             value: currentVoltage
         });
-        // Sort options by voltage value
         options.sort((a, b) => a.value - b.value);
     }
 
     return options;
   }
-
 }

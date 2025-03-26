@@ -64,20 +64,21 @@ export class SystemService {
 
           boardtemp1: 30,
           boardtemp2: 40,
-          overheat_mode: 0
+          overheat_mode: 0,
+          nonceRange: 0x151C,        // Added: Default S19XP-Stock value
+          nonceRangeCovered: 0.1258  // Added: (0x151C / 0xFFFFFFFF) * 100
         }
       ).pipe(delay(1000));
     }
   }
 
   public restart(uri: string = '') {
-    return this.httpClient.post(`${uri}/api/system/restart`, {}, {responseType: 'text'});
+    return this.httpClient.post(`${uri}/api/system/restart`, {}, { responseType: 'text' });
   }
 
   public updateSystem(uri: string = '', update: any) {
     return this.httpClient.patch(`${uri}/api/system`, update);
   }
-
 
   private otaUpdate(file: File | Blob, url: string) {
     return new Observable<HttpEvent<string>>((subscriber) => {
@@ -89,16 +90,16 @@ export class SystemService {
         return this.httpClient.post(url, fileContent, {
           reportProgress: true,
           observe: 'events',
-          responseType: 'text', // Specify the response type
+          responseType: 'text',
           headers: {
-            'Content-Type': 'application/octet-stream', // Set the content type
+            'Content-Type': 'application/octet-stream',
           },
         }).subscribe({
           next: (event) => {
             subscriber.next(event);
           },
           error: (err) => {
-            subscriber.error(err)
+            subscriber.error(err);
           },
           complete: () => {
             subscriber.complete();
@@ -112,10 +113,10 @@ export class SystemService {
   public performOTAUpdate(file: File | Blob) {
     return this.otaUpdate(file, `/api/system/OTA`);
   }
+
   public performWWWOTAUpdate(file: File | Blob) {
     return this.otaUpdate(file, `/api/system/OTAWWW`);
   }
-
 
   public getSwarmInfo(uri: string = ''): Observable<{ ip: string }[]> {
     return this.httpClient.get(`${uri}/api/swarm/info`) as Observable<{ ip: string }[]>;
